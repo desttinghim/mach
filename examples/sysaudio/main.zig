@@ -52,8 +52,6 @@ pub fn update(app: *App, engine: *mach.Core) !void {
 
     engine.swap_chain.?.present();
     back_buffer_view.release();
-
-    app.audio.waitEvents();
 }
 
 // A simple tone engine.
