@@ -23,6 +23,8 @@ pub const DataCallback = if (@import("builtin").zig_backend == .stage1)
 else
     *const fn (device: *Device, user_data: ?*anyopaque, buffer: []u8) void;
 
+var seconds_offset: f32 = 0;
+
 pub const Device = struct {
     properties: Properties,
 
@@ -61,34 +63,15 @@ pub const Device = struct {
                     ) callconv(.C) void {
                         _ = frame_count_min;
                         const outstream = SoundIoOutStream{ .handle = @ptrCast(*c.SoundIoOutStream, c_outstream) };
-                        const device = @ptrCast(*Device, @alignCast(@alignOf(Device), outstream.handle.userdata));
-
-                        // TODO(sysaudio): provide callback with outstream.sampleRate()
-
-                        // TODO(sysaudio): according to issue tracker and PR from mason (did we include it?)
-                        // there may be issues with frame_count_max being way too large on Windows. May need
-                        // to artificially limit it or use Mason's PR.
-
-                        // The data callback gives us planar data, e.g. in AAAABBBB format for channels
-                        // A and B. WebAudio similarly requires data in planar format. libsoundio however
-                        // does not guarantee planar data format, it may be in interleaved format ABABABAB.
-                        // Invoke our data callback with a temporary buffer, this involves one copy later
-                        // but it's such a small amount of memory it is entirely negligible.
                         const layout = outstream.layout();
-                        const total_frame_count = @intCast(usize, frame_count_max);
-                        const buffer_size: usize = @sizeOf(f32) * total_frame_count * @intCast(usize, layout.channelCount());
-                        const addr = @ptrToInt(&device.planar_buffer);
-                        const aligned_addr = std.mem.alignForward(addr, @alignOf(f32));
-                        const padding = aligned_addr - addr;
-                        const planar_buffer = device.planar_buffer[padding..buffer_size];
-                        device.data_callback.?(device, device.user_data.?, planar_buffer);
+                        const float_sample_rate = outstream.sampleRate();
+                        const seconds_per_frame = 1.0 / @intToFloat(f32, float_sample_rate);
+                        var frames_left = frame_count_max;
 
-                        var frames_left = total_frame_count;
                         while (frames_left > 0) {
-                            var frame_count: i32 = @intCast(i32, frames_left);
+                            var frame_count = frames_left;
 
                             var areas: [*]c.SoundIoChannelArea = undefined;
-                            // TODO(sysaudio): improve error handling
                             outstream.beginWrite(
                                 @ptrCast([*]?[*]c.SoundIoChannelArea, &areas),
                                 &frame_count,
@@ -96,20 +79,24 @@ pub const Device = struct {
 
                             if (frame_count == 0) break;
 
-                            var channel: usize = 0;
-                            while (channel < @intCast(usize, layout.channelCount())) : (channel += 1) {
-                                const channel_ptr = areas[channel].ptr;
-                                var frame: c_int = 0;
-                                while (frame < frame_count) : (frame += 1) {
-                                    const sample_start = (channel * total_frame_count * @sizeOf(f32)) + (@intCast(usize, frame) * @sizeOf(f32));
-                                    const src = @ptrCast(*f32, @alignCast(@alignOf(f32), &planar_buffer[sample_start]));
-                                    const dst = &channel_ptr[@intCast(usize, areas[channel].step * frame)];
-                                    @ptrCast(*f32, @alignCast(@alignOf(f32), dst)).* = src.*;
+                            const pitch = 440.0;
+                            const radians_per_second = pitch * 2.0 * std.math.pi;
+                            var frame: c_int = 0;
+                            while (frame < frame_count) : (frame += 1) {
+                                const sample = std.math.sin((seconds_offset + @intToFloat(f32, frame) *
+                                    seconds_per_frame) * radians_per_second);
+                                {
+                                    var channel: usize = 0;
+                                    while (channel < @intCast(usize, layout.channelCount())) : (channel += 1) {
+                                        const channel_ptr = areas[channel].ptr;
+                                        const sample_ptr = &channel_ptr[@intCast(usize, areas[channel].step * frame)];
+                                        @ptrCast(*f32, @alignCast(@alignOf(f32), sample_ptr)).* = sample;
+                                    }
                                 }
                             }
-                            // TODO(sysaudio): improve error handling
+                            seconds_offset += seconds_per_frame * @intToFloat(f32, frame_count);
                             outstream.endWrite() catch |err| std.debug.panic("end write failed: {s}", .{@errorName(err)});
-                            frames_left -= @intCast(usize, frame_count);
+                            frames_left -= frame_count;
                         }
                     }
                 }).cCallback);

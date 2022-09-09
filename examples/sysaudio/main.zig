@@ -52,6 +52,8 @@ pub fn update(app: *App, engine: *mach.Core) !void {
 
     engine.swap_chain.?.present();
     back_buffer_view.release();
+
+    app.audio.waitEvents();
 }
 
 // A simple tone engine.
@@ -68,6 +70,7 @@ pub fn update(app: *App, engine: *mach.Core) !void {
 // the note then fades out slowly.)
 pub const ToneEngine = struct {
     playing: [2048]Tone = std.mem.zeroes([2048]Tone),
+    total_samples: usize = 0,
 
     const Tone = struct {
         frequency: f32,
@@ -104,31 +107,10 @@ pub const ToneEngine = struct {
         var frame: usize = 0;
         while (frame < frames) : (frame += 1) {
             // Render the sample for this frame (e.g. for both left and right audio channels.)
-            var sample: f32 = 0;
-            for (engine.playing) |*tone| {
-                if (tone.sample_counter >= tone.duration) {
-                    continue;
-                }
-                tone.sample_counter += 1;
-                const sample_counter = @intToFloat(f32, tone.sample_counter);
-                const duration = @intToFloat(f32, tone.duration);
-
-                // The sine wave that plays the frequency.
-                const gain = 0.1;
-                const sine_wave = std.math.sin(tone.frequency * 2.0 * std.math.pi * sample_counter / sample_rate) * gain;
-
-                // A number ranging from 0.0 to 1.0 in the first 1/64th of the duration of the tone.
-                const fade_in = std.math.min(sample_counter / (duration / 64.0), 1.0);
-
-                // A number ranging from 1.0 to 0.0 over half the duration of the tone.
-                const progression = sample_counter / duration; // 0.0 (tone start) to 1.0 (tone end)
-                const fade_out = 1.0 - std.math.clamp(std.math.log10(progression * 10.0), 0.0, 1.0);
-
-                // Mix this tone into the sample we'll actually play on e.g. the speakers, reducing
-                // sine wave intensity if we're fading in or out over the entire duration of the
-                // tone.
-                sample += sine_wave * fade_in * fade_out;
-            }
+            const gain = 0.1;
+            const sine_wave = std.math.sin(440 * 2.0 * std.math.pi * @intToFloat(f32, engine.total_samples) / sample_rate) * gain;
+            var sample: f32 = sine_wave;
+            engine.total_samples += 1;
 
             const sample_t: T = sample: {
                 switch (T) {
