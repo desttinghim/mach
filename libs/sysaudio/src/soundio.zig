@@ -74,6 +74,7 @@ pub const Device = struct {
                         device.data_callback.?(device, device.user_data.?, planar_buffer);
 
                         var frames_left = frame_count_max;
+                        var frame_offset: c_int = 0;
                         while (frames_left > 0) {
                             var frame_count = frames_left;
 
@@ -90,7 +91,7 @@ pub const Device = struct {
                                 {
                                     var channel: usize = 0;
                                     while (channel < @intCast(usize, layout.channelCount())) : (channel += 1) {
-                                        const sample_start = (channel * total_frame_count * @sizeOf(f32)) + (@intCast(usize, frame) * @sizeOf(f32));
+                                        const sample_start = (channel * total_frame_count * @sizeOf(f32)) + (@intCast(usize, frame_offset + frame) * @sizeOf(f32));
                                         const channel_ptr = areas[channel].ptr;
                                         const src = @ptrCast(*f32, @alignCast(@alignOf(f32), &planar_buffer[sample_start]));
                                         const dst = &channel_ptr[@intCast(usize, areas[channel].step * frame)];
@@ -100,6 +101,7 @@ pub const Device = struct {
                             }
                             outstream.endWrite() catch |err| std.debug.panic("end write failed: {s}", .{@errorName(err)});
                             frames_left -= frame_count;
+                            frame_offset += frame_count;
                         }
                     }
                 }).cCallback);
